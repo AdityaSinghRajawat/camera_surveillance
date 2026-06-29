@@ -36,6 +36,7 @@ RUN mkdir -p /models \
 
 # Build with CGO enabled (required for gocv). Output a single binary.
 ENV CGO_ENABLED=1
+RUN sed -i 's/-lopencv_core/-lopencv_core -ltbb/g' /usr/local/lib/pkgconfig/opencv4.pc
 RUN go build -o /usr/local/bin/worker ./cmd
 
 # Control/signaling HTTP and the WebRTC UDP mux port.
