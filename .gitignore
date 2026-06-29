@@ -1,0 +1,28 @@
+# Env
+.env
+**/.env
+!.env.example
+!**/.env.example
+
+# Node / Bun
+node_modules/
+dist/
+build/
+*.log
+.DS_Store
+bun.lockb
+
+# Go
+worker/bin/
+*.test
+*.out
+
+# Models (downloaded at build time; large binaries)
+worker/models/*.caffemodel
+
+# Test media
+infra/teststream/*.avi
+infra/media/
+
+# Assignments
+Skylark_Labs_Software_Engineer_Technical_Assignment.pdf

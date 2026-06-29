@@ -1,0 +1,123 @@
+# ─────────────────────────────────────────────────────────────────────────
+# Skylark Real-Time Camera Surveillance — full stack
+# `docker compose up --build` brings up: postgres, backend, worker, frontend,
+# plus a self-contained MediaMTX RTSP server fed a looping pedestrian video so
+# person detection works out of the box with no external camera.
+# ─────────────────────────────────────────────────────────────────────────
+name: skylark
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: skylark-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-skylark}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-skylark}
+      POSTGRES_DB: ${POSTGRES_DB:-skylark}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-skylark} -d ${POSTGRES_DB:-skylark}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [skylark]
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: skylark-api
+    environment:
+      NODE_ENV: production
+      PORT: "8080"
+      DATABASE_URL: postgres://${POSTGRES_USER:-skylark}:${POSTGRES_PASSWORD:-skylark}@postgres:5432/${POSTGRES_DB:-skylark}
+      JWT_SECRET: ${JWT_SECRET:-change-me}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      WORKER_API_KEY: ${WORKER_API_KEY:-worker-shared-secret}
+      WORKER_CONTROL_URL: http://worker:8090
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # rtsp URL the seeder gives the demo camera
+      DEMO_RTSP_URL: rtsp://mediamtx:8554/stream
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # The Bun image has no curl; use bun's fetch against the (unversioned) /health route.
+      test: ["CMD-SHELL", "bun -e \"fetch('http://localhost:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    networks: [skylark]
+
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: skylark-worker
+    environment:
+      WORKER_HTTP_PORT: "8090"
+      WEBRTC_UDP_PORT: "${WEBRTC_UDP_PORT:-8091}"
+      WEBRTC_PUBLIC_IP: ${WEBRTC_PUBLIC_IP:-127.0.0.1}
+      BACKEND_INTERNAL_URL: http://backend:8080/api/v1
+      WORKER_API_KEY: ${WORKER_API_KEY:-worker-shared-secret}
+      DETECTION_PROTOTXT: /models/MobileNetSSD_deploy.prototxt
+      DETECTION_MODEL: /models/MobileNetSSD_deploy.caffemodel
+      DETECTION_CONFIDENCE: ${DETECTION_CONFIDENCE:-0.5}
+      DETECTION_INTERVAL_MS: ${DETECTION_INTERVAL_MS:-200}
+      ALERT_DEDUP_WINDOW_MS: ${ALERT_DEDUP_WINDOW_MS:-5000}
+      STATS_INTERVAL_MS: ${STATS_INTERVAL_MS:-2000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "${WORKER_HTTP_PORT:-8090}:8090"
+      - "${WEBRTC_UDP_PORT:-8091}:8091/udp"
+    depends_on:
+      backend:
+        condition: service_started
+    networks: [skylark]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: skylark-web
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      backend:
+        condition: service_started
+    networks: [skylark]
+
+  # ── Self-contained RTSP source (so the demo works with no real camera) ──
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: skylark-mediamtx
+    environment:
+      MTX_PROTOCOLS: tcp
+    ports:
+      - "${MEDIAMTX_RTSP_PORT:-8554}:8554"
+    networks: [skylark]
+
+  teststream:
+    build:
+      context: ./infra/teststream
+      dockerfile: Dockerfile
+    container_name: skylark-teststream
+    depends_on:
+      mediamtx:
+        condition: service_started
+    restart: unless-stopped
+    networks: [skylark]
+
+volumes:
+  pgdata:
+
+networks:
+  skylark:
+    driver: bridge
